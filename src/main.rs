@@ -19,15 +19,17 @@ fn main() -> Result<()> {
             let mut header = [0; 100];
             file.read_exact(&mut header)?;
 
-            // The page size is stored at the 16th byte offset, using 2 bytes in big-endian order
-            #[allow(unused_variables)]
-            let page_size = u16::from_be_bytes([header[16], header[17]]);
+            let page_size = u16::from_be_bytes([header[16], header[17]]) as usize;
 
-            // You can use print statements as follows for debugging, they'll be visible when running tests.
+            let mut sql_schema_page = vec![0; page_size - 100];
+            file.read_exact(&mut sql_schema_page)?;
+
+            let btree_header = &sql_schema_page[0..8];
+            let btree_cells_on_page =
+                u16::from_be_bytes([btree_header[3], btree_header[4]]) as usize;
+
             println!("database page size: {}", page_size);
-
-            // Uncomment this block to pass the first stage
-            // println!("database page size: {}", page_size);
+            println!("number of tables: {}", btree_cells_on_page);
         }
         _ => bail!("Missing or invalid command passed: {}", command),
     }
