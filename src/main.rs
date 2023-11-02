@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use std::fs::File;
 use std::io::prelude::*;
 
+#[derive(Debug)]
 enum BTreeCell {
     // InteriorIndexCell(BTreeInteriorIndexCell),
     // InteriorTableCell(BTreeInteriorTableCell),
@@ -9,6 +10,7 @@ enum BTreeCell {
     LeafTableCell(BTreeLeafTableCell),
 }
 
+#[derive(Debug)]
 struct BTreeLeafTableCell {
     payload_size: Varint,
     row_id: Varint,
@@ -27,11 +29,13 @@ struct BTreePageHeader {
     cell_pointers: Vec<u16>,
 }
 
+#[derive(Debug)]
 struct Varint {
     value: i64,
     size: u8,
 }
 
+#[derive(Debug)]
 enum RecordFormat {
     NULL,
     Integer8(i8),
@@ -108,6 +112,7 @@ impl RecordFormat {
     }
 }
 
+#[derive(Debug)]
 struct Record {
     body: Vec<RecordFormat>,
 }
@@ -223,6 +228,24 @@ impl BTreePageHeader {
 }
 
 struct SchemaTable {
+    records: Vec<SchemaRecord>,
+}
+
+impl SchemaTable {
+    fn new(file: &mut File, b_tree_page_header: BTreePageHeader) -> Result<Self> {
+        let mut cells = read_cells(file, b_tree_page_header)?;
+        cells.sort_by(|a, b| a.row_id.value.cmp(&b.row_id.value));
+
+        Ok(SchemaTable {
+            records: cells
+                .into_iter()
+                .map(|c| c.payload.into())
+                .collect::<Vec<SchemaRecord>>(),
+        })
+    }
+}
+
+struct SchemaRecord {
     r#type: String,
     name: String,
     tbl_name: String,
@@ -230,23 +253,23 @@ struct SchemaTable {
     sql: String,
 }
 
-impl SchemaTable {
-    fn from_record(record: Record) -> Result<Self> {
+impl From<Record> for SchemaRecord {
+    fn from(record: Record) -> Self {
         let mut record_body_iter = record.body.iter();
 
         let r#type = match record_body_iter.next() {
             Some(RecordFormat::String(s)) => s,
-            _ => bail!("Invalid record format"),
+            _ => panic!("Invalid record format"),
         };
 
         let name = match record_body_iter.next() {
             Some(RecordFormat::String(s)) => s,
-            _ => bail!("Invalid record format"),
+            _ => panic!("Invalid record format"),
         };
 
         let tbl_name = match record_body_iter.next() {
             Some(RecordFormat::String(s)) => s,
-            _ => bail!("Invalid record format"),
+            _ => panic!("Invalid record format"),
         };
 
         let rootpage = match record_body_iter.next() {
@@ -255,25 +278,23 @@ impl SchemaTable {
             Some(RecordFormat::Integer24(i)) => *i as i64,
             Some(RecordFormat::Integer48(i)) => *i as i64,
             Some(RecordFormat::Integer64(i)) => *i as i64,
-            _ => bail!("Invalid record format"),
+            _ => panic!("Invalid record format"),
         };
 
         let sql = match record_body_iter.next() {
             Some(RecordFormat::String(s)) => s,
-            _ => bail!("Invalid record format"),
+            _ => panic!("Invalid record format"),
         };
 
-        Ok(SchemaTable {
+        SchemaRecord {
             r#type: r#type.to_string(),
             name: name.to_string(),
             tbl_name: tbl_name.to_string(),
             rootpage,
             sql: sql.to_string(),
-        })
+        }
     }
 }
-
-impl SchemaTable {}
 
 fn main() -> Result<()> {
     // Parse arguments
@@ -301,19 +322,31 @@ fn main() -> Result<()> {
             println!("number of tables: {}", b_tree_page_header.num_cells);
         }
         ".tables" => {
-            let mut cells = read_cells(&mut file, b_tree_page_header)?;
+            let schema_table = SchemaTable::new(&mut file, b_tree_page_header)?;
             let mut result = String::new();
-            cells.sort_by(|a, b| a.row_id.value.cmp(&b.row_id.value));
 
-            for cell in cells {
-                let record = cell.payload;
-                let schema_table = SchemaTable::from_record(record)?;
-                result += &format!("{} ", schema_table.name);
+            for record in schema_table.records {
+                result += &format!("{} ", record.name);
             }
 
             println!("{}", result.trim_end());
         }
-        _ => bail!("Missing or invalid command passed: {}!", command),
+        x => {
+            let table = x.split(' ').last().unwrap();
+            let schema_table = SchemaTable::new(&mut file, b_tree_page_header)?;
+
+            let page = schema_table
+                .records
+                .iter()
+                .find(|r| r.name == table)
+                .unwrap()
+                .rootpage;
+
+            file.seek(std::io::SeekFrom::Start(page as u64 * page_size as u64))?;
+            let b_tree_page_header = BTreePageHeader::new(&mut file)?;
+
+            println!("{}", b_tree_page_header.num_cells);
+        }
     }
 
     Ok(())
