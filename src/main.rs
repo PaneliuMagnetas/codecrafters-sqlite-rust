@@ -217,6 +217,7 @@ impl BTreePageHeader {
     }
 }
 
+#[derive(Debug)]
 struct SchemaTable {
     records: Vec<SchemaRecord>,
 }
@@ -247,6 +248,7 @@ impl SchemaTable {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 struct SchemaRecord {
     r#type: String,
     name: String,
@@ -336,6 +338,8 @@ fn main() -> Result<()> {
         x => {
             let table = x.split(' ').last().unwrap();
             let schema_table = SchemaTable::new(&mut file, b_tree_page_header)?;
+
+            eprintln!("{:?}", schema_table);
 
             let page = schema_table
                 .records
