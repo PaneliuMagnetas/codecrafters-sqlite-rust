@@ -313,7 +313,7 @@ fn main() -> Result<()> {
 
             println!("{}", result.trim_end());
         }
-        _ => bail!("Missing or invalid command passed: {}", command),
+        _ => bail!("Missing or invalid command passed: {}!", command),
     }
 
     Ok(())
