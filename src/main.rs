@@ -348,7 +348,9 @@ fn main() -> Result<()> {
                 .expect(&format!("Table {table} not found"))
                 .rootpage;
 
-            file.seek(std::io::SeekFrom::Start(page as u64 * page_size as u64))?;
+            file.seek(std::io::SeekFrom::Start(
+                (page as u64 - 1) * page_size as u64,
+            ))?;
             let b_tree_page_header = BTreePageHeader::new(&mut file)?;
 
             println!("{}", b_tree_page_header.num_cells);
