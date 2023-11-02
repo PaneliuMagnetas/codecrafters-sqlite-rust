@@ -10,6 +10,7 @@ enum BTreeCell {
     LeafTableCell(BTreeLeafTableCell),
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct BTreeLeafTableCell {
     payload_size: Varint,
@@ -18,6 +19,7 @@ struct BTreeLeafTableCell {
     first_overflow_page: u32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct BTreePageHeader {
     page_type: BTreePageType,
@@ -172,18 +174,6 @@ enum BTreePageType {
     TBD = 0x00,
 }
 
-impl BTreePageType {
-    fn to_be_bytes(&self) -> [u8; 1] {
-        match self {
-            // BTreePageType::InteriorIndexPage => [0x02],
-            // BTreePageType::InteriorTablePage => [0x05],
-            // BTreePageType::LeafIndexPage => [0x0a],
-            BTreePageType::LeafTablePage => [0x0d],
-            BTreePageType::TBD => [0; 1],
-        }
-    }
-}
-
 impl BTreePageHeader {
     fn new(file: &mut File) -> Result<Self> {
         let mut page = BTreePageHeader {
@@ -233,18 +223,30 @@ struct SchemaTable {
 
 impl SchemaTable {
     fn new(file: &mut File, b_tree_page_header: BTreePageHeader) -> Result<Self> {
-        let mut cells = read_cells(file, b_tree_page_header)?;
-        cells.sort_by(|a, b| a.row_id.value.cmp(&b.row_id.value));
+        match b_tree_page_header.page_type {
+            BTreePageType::LeafTablePage => {
+                let mut cells = read_cells(file, &b_tree_page_header)?;
+                cells.sort_by(|a, b| match (a, b) {
+                    (BTreeCell::LeafTableCell(a), BTreeCell::LeafTableCell(b)) => {
+                        a.row_id.value.cmp(&b.row_id.value)
+                    }
+                });
 
-        Ok(SchemaTable {
-            records: cells
-                .into_iter()
-                .map(|c| c.payload.into())
-                .collect::<Vec<SchemaRecord>>(),
-        })
+                Ok(SchemaTable {
+                    records: cells
+                        .into_iter()
+                        .map(|c| match c {
+                            BTreeCell::LeafTableCell(c) => c.payload.into(),
+                        })
+                        .collect::<Vec<SchemaRecord>>(),
+                })
+            }
+            _ => unimplemented!(),
+        }
     }
 }
 
+#[allow(dead_code)]
 struct SchemaRecord {
     r#type: String,
     name: String,
@@ -339,7 +341,7 @@ fn main() -> Result<()> {
                 .records
                 .iter()
                 .find(|r| r.name == table)
-                .unwrap()
+                .expect(&format!("Table {table} not found"))
                 .rootpage;
 
             file.seek(std::io::SeekFrom::Start(page as u64 * page_size as u64))?;
@@ -352,28 +354,30 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn read_cells(
-    file: &mut File,
-    b_tree_page_header: BTreePageHeader,
-) -> Result<Vec<BTreeLeafTableCell>> {
+fn read_cells(file: &mut File, b_tree_page_header: &BTreePageHeader) -> Result<Vec<BTreeCell>> {
     let mut cells = Vec::new();
 
-    for cell_pointer in b_tree_page_header.cell_pointers {
-        file.seek(std::io::SeekFrom::Start(cell_pointer as u64))?;
-        cells.push(read_cell(file)?);
+    for cell_pointer in &b_tree_page_header.cell_pointers {
+        file.seek(std::io::SeekFrom::Start(*cell_pointer as u64))?;
+        cells.push(read_cell(file, b_tree_page_header)?);
     }
 
     Ok(cells)
 }
 
-fn read_cell(file: &mut File) -> Result<BTreeLeafTableCell> {
-    let payload_size = Varint::from_file(file)?;
-    let row_id = Varint::from_file(file)?;
+fn read_cell(file: &mut File, b_tree_page_header: &BTreePageHeader) -> Result<BTreeCell> {
+    match b_tree_page_header.page_type {
+        BTreePageType::LeafTablePage => {
+            let payload_size = Varint::from_file(file)?;
+            let row_id = Varint::from_file(file)?;
 
-    Ok(BTreeLeafTableCell {
-        payload_size,
-        row_id,
-        payload: Record::new(file)?,
-        first_overflow_page: 0,
-    })
+            Ok(BTreeCell::LeafTableCell(BTreeLeafTableCell {
+                payload_size,
+                row_id,
+                payload: Record::new(file)?,
+                first_overflow_page: 0,
+            }))
+        }
+        _ => unimplemented!(),
+    }
 }
