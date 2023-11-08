@@ -15,11 +15,11 @@ impl<'a> Tokenizer<'a> {
         (c, index + 1)
     }
 
-    pub fn next_char(&mut self) -> Option<char> {
-        let (c, i) = self.get_char(self.index);
-        self.index = i;
-        c
-    }
+    // pub fn next_char(&mut self) -> Option<char> {
+    //     let (c, i) = self.get_char(self.index);
+    //     self.index = i;
+    //     c
+    // }
 
     pub fn take_while(&mut self, func: impl Fn(&str) -> bool) -> Vec<&'a str> {
         let mut result = Vec::new();
@@ -98,7 +98,7 @@ impl<'a> Tokenizer<'a> {
 
         let token = token.unwrap();
 
-        if token != tag {
+        if token.to_lowercase() != tag.to_lowercase() {
             bail!("Expected token: {}, found: {}", tag, token);
         }
 
