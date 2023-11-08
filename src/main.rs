@@ -1,6 +1,11 @@
-use anyhow::{bail, Result};
+mod tokenizer;
+
+use anyhow::{anyhow, bail, Result};
+use std::fmt::{self, Formatter};
 use std::fs::File;
-use std::io::prelude::*;
+use std::io::{Read, Seek};
+
+use crate::tokenizer::Tokenizer;
 
 #[derive(Debug)]
 enum BTreeCell {
@@ -17,18 +22,6 @@ struct BTreeLeafTableCell {
     row_id: Varint,
     payload: Record,
     first_overflow_page: u32,
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-struct BTreePageHeader {
-    page_type: BTreePageType,
-    first_freeblock_offset: u16,
-    num_cells: u16,
-    cell_content_area: u16,
-    fragment_bytes: u8,
-    right_most_pointer: u32,
-    cell_pointers: Vec<u16>,
 }
 
 #[derive(Debug)]
@@ -54,62 +47,100 @@ enum RecordFormat {
 }
 
 impl RecordFormat {
-    fn new(file: &mut File, v: &Varint) -> Result<Self> {
-        match v.value {
-            0 => Ok(RecordFormat::NULL),
+    fn new(payload: &[u8], value: i64) -> Result<(Self, &[u8])> {
+        match value {
+            0 => Ok((RecordFormat::NULL, payload)),
             1 => {
-                let mut buf = [0; 1];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Integer8(buf[0] as i8))
+                let buf: [u8; 1] = [payload[0]];
+                Ok((
+                    RecordFormat::Integer8(i8::from_be_bytes(buf)),
+                    &payload[1..],
+                ))
             }
             2 => {
-                let mut buf = [0; 2];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Integer16(i16::from_be_bytes(buf)))
+                let buf: [u8; 2] = [payload[0], payload[1]];
+                Ok((
+                    RecordFormat::Integer16(i16::from_be_bytes(buf)),
+                    &payload[2..],
+                ))
             }
             3 => {
-                let mut buf = [0; 3];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Integer24(i32::from_be_bytes([
-                    0, buf[0], buf[1], buf[2],
-                ])))
+                let buf: [u8; 4] = [0, payload[0], payload[1], payload[2]];
+                Ok((
+                    RecordFormat::Integer24(i32::from_be_bytes(buf)),
+                    &payload[3..],
+                ))
             }
             4 => {
-                let mut buf = [0; 4];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Integer32(i32::from_be_bytes(buf)))
+                let buf: [u8; 4] = [payload[0], payload[1], payload[2], payload[3]];
+                Ok((
+                    RecordFormat::Integer32(i32::from_be_bytes(buf)),
+                    &payload[4..],
+                ))
             }
             5 => {
-                let mut buf = [0; 6];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Integer48(i64::from_be_bytes([
-                    0, 0, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
-                ])))
+                let buf: [u8; 8] = [
+                    0, 0, payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                ];
+                Ok((
+                    RecordFormat::Integer48(i64::from_be_bytes(buf)),
+                    &payload[6..],
+                ))
             }
             6 => {
-                let mut buf = [0; 8];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Integer64(i64::from_be_bytes(buf)))
+                let buf: [u8; 8] = [
+                    payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                    payload[6], payload[7],
+                ];
+                Ok((
+                    RecordFormat::Integer64(i64::from_be_bytes(buf)),
+                    &payload[8..],
+                ))
             }
             7 => {
-                let mut buf = [0; 8];
-                file.read_exact(&mut buf)?;
-                Ok(RecordFormat::Float64(f64::from_be_bytes(buf)))
+                let buf: [u8; 8] = [
+                    payload[0], payload[1], payload[2], payload[3], payload[4], payload[5],
+                    payload[6], payload[7],
+                ];
+                Ok((
+                    RecordFormat::Float64(f64::from_be_bytes(buf)),
+                    &payload[8..],
+                ))
             }
-            8 => Ok(RecordFormat::Integer0),
-            9 => Ok(RecordFormat::Integer1),
+            8 => Ok((RecordFormat::Integer0, payload)),
+            9 => Ok((RecordFormat::Integer1, payload)),
             10 | 11 => bail!("Invalid record format"),
             _ => {
-                if v.value % 2 == 0 {
-                    let mut buf = vec![0; ((v.value - 12) / 2) as usize];
-                    file.read_exact(&mut buf)?;
-                    Ok(RecordFormat::Blob(buf))
+                if value % 2 == 0 {
+                    let size = (value - 12) / 2;
+                    let buf = &payload[..size as usize];
+                    Ok((RecordFormat::Blob(buf.to_vec()), &payload[size as usize..]))
                 } else {
-                    let mut buf = vec![0; ((v.value - 13) / 2) as usize];
-                    file.read_exact(&mut buf)?;
-                    Ok(RecordFormat::String(String::from_utf8(buf)?))
+                    let size = (value - 13) / 2;
+                    let buf = &payload[..size as usize];
+                    let string = String::from_utf8_lossy(buf).to_string();
+                    Ok((RecordFormat::String(string), &payload[size as usize..]))
                 }
             }
+        }
+    }
+}
+
+impl fmt::Display for RecordFormat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            RecordFormat::NULL => write!(f, "NULL"),
+            RecordFormat::Integer8(v) => write!(f, "{}", v),
+            RecordFormat::Integer16(v) => write!(f, "{}", v),
+            RecordFormat::Integer24(v) => write!(f, "{}", v),
+            RecordFormat::Integer32(v) => write!(f, "{}", v),
+            RecordFormat::Integer48(v) => write!(f, "{}", v),
+            RecordFormat::Integer64(v) => write!(f, "{}", v),
+            RecordFormat::Float64(v) => write!(f, "{}", v),
+            RecordFormat::Integer0 => write!(f, "0"),
+            RecordFormat::Integer1 => write!(f, "1"),
+            RecordFormat::Blob(v) => write!(f, "{:?}", v),
+            RecordFormat::String(v) => write!(f, "{}", v),
         }
     }
 }
@@ -120,21 +151,25 @@ struct Record {
 }
 
 impl Record {
-    fn new(file: &mut File) -> Result<Self> {
+    fn new(payload: &[u8]) -> Result<Self> {
         let mut header = Vec::new();
         let mut body = Vec::new();
+        let mut payload = payload;
 
-        let header_size_varint = Varint::from_file(file)?;
+        let (header_size_varint, remaining) = Varint::from(payload);
+        payload = remaining;
         let mut header_size = header_size_varint.value - header_size_varint.size as i64;
 
         while header_size > 0 {
-            let varint = Varint::from_file(file)?;
+            let (varint, remaining) = Varint::from(payload);
+            payload = remaining;
             header_size -= varint.size as i64;
             header.push(varint);
         }
 
         for v in &header {
-            let record_format = RecordFormat::new(file, v)?;
+            let (record_format, remaining) = RecordFormat::new(payload, v.value)?;
+            payload = remaining;
             body.push(record_format);
         }
 
@@ -143,25 +178,30 @@ impl Record {
 }
 
 impl Varint {
-    fn from_file(file: &mut File) -> Result<Self> {
-        let mut byte = [0; 1];
+    fn from(buf: &[u8]) -> (Self, &[u8]) {
+        if buf.is_empty() {
+            panic!("Varint::from: buf is empty");
+        }
+
         let mut result = 0;
         let mut size = 0;
 
-        loop {
-            file.read_exact(&mut byte)?;
-            result = (result << 7) | (byte[0] & 0x7f) as i64;
+        for byte in buf {
+            result = (result << 7) | (byte & 0x7f) as i64;
             size += 1;
 
-            if byte[0] & 0x80 == 0 {
+            if byte & 0x80 == 0 {
                 break;
             }
         }
 
-        Ok(Varint {
-            value: result,
-            size,
-        })
+        (
+            Varint {
+                value: result,
+                size: size as u8,
+            },
+            &buf[size..],
+        )
     }
 }
 
@@ -171,25 +211,63 @@ enum BTreePageType {
     // InteriorTablePage = 0x05,
     // LeafIndexPage = 0x0a,
     LeafTablePage = 0x0d,
-    TBD = 0x00,
 }
 
-impl BTreePageHeader {
-    fn new(file: &mut File) -> Result<Self> {
-        let mut page = BTreePageHeader {
-            page_type: BTreePageType::TBD,
-            first_freeblock_offset: 0,
-            num_cells: 0,
-            cell_content_area: 0,
-            fragment_bytes: 0,
-            right_most_pointer: 0,
-            cell_pointers: Vec::new(),
-        };
+#[allow(dead_code)]
+#[derive(Debug)]
+struct BTreePage {
+    page_type: BTreePageType,
+    first_freeblock_offset: u16,
+    num_cells: u16,
+    cell_content_area: u16,
+    fragment_bytes: u8,
+    right_most_pointer: u32,
+    cell_pointers: Vec<u16>,
+    cells: Vec<BTreeCell>,
+}
 
-        let mut buf = [0; 8];
+impl BTreePage {
+    fn new(page: &[u8]) -> Result<Self> {
+        let mut b_tree_page = Self::read_header(page)?;
+        b_tree_page.read_cells(page)?;
 
-        file.read_exact(&mut buf)?;
-        page.page_type = match buf[0] {
+        Ok(b_tree_page)
+    }
+
+    fn with_offset_header(page: &[u8], offset: usize) -> Result<Self> {
+        let mut b_tree_page = Self::read_header(&page[offset..])?;
+        b_tree_page.read_cells(page)?;
+
+        Ok(b_tree_page)
+    }
+
+    fn read_cells(&mut self, page: &[u8]) -> Result<()> {
+        let mut cells = Vec::new();
+        for cell_pointer in &self.cell_pointers {
+            let page_slice = &page[*cell_pointer as usize..];
+            cells.push(match self.page_type {
+                BTreePageType::LeafTablePage => {
+                    let (payload_size, page_slice) = Varint::from(page_slice);
+                    let (row_id, page_slice) = Varint::from(page_slice);
+
+                    let payload_size_val = payload_size.value as usize;
+                    BTreeCell::LeafTableCell(BTreeLeafTableCell {
+                        payload_size,
+                        row_id,
+                        payload: Record::new(&page_slice[..(payload_size_val as usize)])?,
+                        first_overflow_page: 0,
+                    })
+                }
+            });
+        }
+
+        self.cells = cells;
+
+        Ok(())
+    }
+
+    fn read_header(page: &[u8]) -> Result<Self> {
+        let page_type = match page[0] {
             // 0x02 => BTreePageType::InteriorIndexPage,
             // 0x05 => BTreePageType::InteriorTablePage,
             // 0x0a => BTreePageType::LeafIndexPage,
@@ -197,23 +275,34 @@ impl BTreePageHeader {
             _ => bail!("Invalid page type"),
         };
 
-        page.first_freeblock_offset = u16::from_be_bytes([buf[1], buf[2]]);
-        page.num_cells = u16::from_be_bytes([buf[3], buf[4]]);
-        page.cell_content_area = u16::from_be_bytes([buf[5], buf[6]]);
-        page.fragment_bytes = buf[7];
+        let first_freeblock_offset = u16::from_be_bytes([page[1], page[2]]);
+        let num_cells = u16::from_be_bytes([page[3], page[4]]);
+        let cell_content_area = u16::from_be_bytes([page[5], page[6]]);
+        let fragment_bytes = page[7];
         // if page.page_type == BTreePageType::InteriorIndexPage
         //     || page.page_type == BTreePageType::InteriorTablePage
         // {
         //     file.read_exact(&mut page.right_most_pointer.to_be_bytes())?;
         // }
 
-        for _ in 0..page.num_cells {
-            let mut cell_buf = [0; 2];
-            file.read_exact(&mut cell_buf)?;
-            page.cell_pointers.push(u16::from_be_bytes(cell_buf));
+        let mut cell_pointers = Vec::new();
+
+        let cell_pointer_size = num_cells as usize * 2 + 8;
+
+        for chunk in page[8..cell_pointer_size].chunks(2) {
+            cell_pointers.push(u16::from_be_bytes([chunk[0], chunk[1]]));
         }
 
-        Ok(page)
+        Ok(BTreePage {
+            page_type,
+            first_freeblock_offset,
+            num_cells,
+            cell_content_area,
+            fragment_bytes,
+            right_most_pointer: 0,
+            cell_pointers,
+            cells: vec![],
+        })
     }
 }
 
@@ -223,26 +312,17 @@ struct SchemaTable {
 }
 
 impl SchemaTable {
-    fn new(file: &mut File, b_tree_page_header: BTreePageHeader) -> Result<Self> {
-        match b_tree_page_header.page_type {
-            BTreePageType::LeafTablePage => {
-                let mut cells = read_cells(file, &b_tree_page_header)?;
-                cells.sort_by(|a, b| match (a, b) {
-                    (BTreeCell::LeafTableCell(a), BTreeCell::LeafTableCell(b)) => {
-                        a.row_id.value.cmp(&b.row_id.value)
-                    }
-                });
-
-                Ok(SchemaTable {
-                    records: cells
-                        .into_iter()
-                        .map(|c| match c {
-                            BTreeCell::LeafTableCell(c) => c.payload.into(),
-                        })
-                        .collect::<Vec<SchemaRecord>>(),
-                })
-            }
-            _ => unimplemented!(),
+    fn new(b_tree_page: BTreePage) -> Result<Self> {
+        match b_tree_page.page_type {
+            BTreePageType::LeafTablePage => Ok(SchemaTable {
+                records: b_tree_page
+                    .cells
+                    .into_iter()
+                    .map(|c| match c {
+                        BTreeCell::LeafTableCell(c) => c.payload.into(),
+                    })
+                    .collect::<Vec<SchemaRecord>>(),
+            }),
         }
     }
 }
@@ -300,6 +380,74 @@ impl From<Record> for SchemaRecord {
     }
 }
 
+impl SchemaRecord {
+    fn get_column_names(&self) -> Result<Vec<String>> {
+        let mut tokenizer = Tokenizer::new(&self.sql);
+
+        tokenizer.tag("CREATE")?;
+        tokenizer.tag("TABLE")?;
+        tokenizer.tag(&self.tbl_name)?;
+
+        tokenizer.tag("(")?;
+
+        let mut result = Vec::new();
+
+        loop {
+            let tokens = tokenizer.take_while(|t| t != "," && t != ")");
+
+            result.push(String::from(tokens[0]));
+
+            if tokenizer.next().unwrap() == ")" {
+                break Ok(result);
+            }
+        }
+    }
+}
+
+struct SqlStatement<'a> {
+    table_name: &'a str,
+    column_variants: Vec<SqlColumnVariant<'a>>,
+}
+
+impl<'a> SqlStatement<'a> {
+    fn new(sql: &'a str) -> Result<Self> {
+        let mut tokenizer = Tokenizer::new(sql);
+        let mut column_variants = Vec::new();
+
+        tokenizer.tag("SELECT")?;
+
+        loop {
+            let mut result = Err(anyhow!("Invalid SQL statement"));
+            match tokenizer.next() {
+                Some(token) => match token {
+                    "," => continue,
+                    "FROM" => break,
+                    "COUNT" => {
+                        tokenizer.tag("(")?;
+                        if let Some(_) = tokenizer.next() {
+                            result = Ok(SqlColumnVariant::Count);
+                        }
+                        tokenizer.tag(")")?;
+                    }
+                    _ => result = Ok(SqlColumnVariant::Column(token)),
+                },
+                None => bail!("Invalid SQL statement"),
+            };
+
+            column_variants.push(result?);
+        }
+
+        let table = tokenizer
+            .next()
+            .ok_or_else(|| anyhow!("Missing table name in sql statement"))?;
+
+        Ok(SqlStatement {
+            column_variants,
+            table_name: table,
+        })
+    }
+}
+
 fn main() -> Result<()> {
     // Parse arguments
     let args = std::env::args().collect::<Vec<_>>();
@@ -316,18 +464,21 @@ fn main() -> Result<()> {
     let mut header = [0; 100];
     file.read_exact(&mut header)?;
 
-    let page_size = u16::from_be_bytes([header[16], header[17]]) as usize;
+    let page_size: usize = u16::from_be_bytes([header[16], header[17]]) as usize;
+    file.seek(std::io::SeekFrom::Start(0))?;
 
-    let b_tree_page_header = BTreePageHeader::new(&mut file)?;
+    let mut schema_table_page = vec![0; page_size];
+    file.read_exact(&mut schema_table_page)?;
+    let b_tree_page = BTreePage::with_offset_header(schema_table_page.as_slice(), 100)?;
 
     match command.as_str() {
         ".dbinfo" => {
             println!("database page size: {}", page_size);
-            println!("number of tables: {}", b_tree_page_header.num_cells);
+            println!("number of tables: {}", b_tree_page.num_cells);
         }
         ".tables" => {
-            let schema_table = SchemaTable::new(&mut file, b_tree_page_header)?;
             let mut result = String::new();
+            let schema_table = SchemaTable::new(b_tree_page)?;
 
             for record in schema_table.records {
                 result += &format!("{} ", record.name);
@@ -336,54 +487,75 @@ fn main() -> Result<()> {
             println!("{}", result.trim_end());
         }
         x => {
-            let table = x.split(' ').last().unwrap();
-            let schema_table = SchemaTable::new(&mut file, b_tree_page_header)?;
+            let sql_statement = SqlStatement::new(x)?;
+            let schema_table = SchemaTable::new(b_tree_page)?;
 
-            eprintln!("{:?}", schema_table);
-
-            let page = schema_table
+            let schema_record = schema_table
                 .records
                 .iter()
-                .find(|r| r.name == table)
-                .expect(&format!("Table {table} not found"))
-                .rootpage;
+                .find(|r| r.name == sql_statement.table_name)
+                .unwrap_or_else(|| {
+                    eprintln!("Table not found");
+                    std::process::exit(1)
+                });
+
+            let column_names = schema_record.get_column_names()?;
 
             file.seek(std::io::SeekFrom::Start(
-                (page as u64 - 1) * page_size as u64,
+                (schema_record.rootpage as u64 - 1) * page_size as u64,
             ))?;
-            let b_tree_page_header = BTreePageHeader::new(&mut file)?;
 
-            println!("{}", b_tree_page_header.num_cells);
+            let mut buf = vec![0; page_size];
+            file.read_exact(&mut buf)?;
+
+            let b_tree_page = BTreePage::new(&buf)?;
+
+            if sql_statement.column_variants.len() == 1 {
+                if let SqlColumnVariant::Count = sql_statement.column_variants[0] {
+                    println!("{}", b_tree_page.num_cells);
+                    return Ok(());
+                }
+            }
+
+            for cell in b_tree_page.cells {
+                match cell {
+                    BTreeCell::LeafTableCell(leaf_table_cell) => {
+                        let mut result = String::new();
+
+                        for column_variant in &sql_statement.column_variants {
+                            match column_variant {
+                                SqlColumnVariant::Count => {
+                                    result += &format!("{} ", b_tree_page.num_cells);
+                                }
+                                SqlColumnVariant::Column(column_name) => {
+                                    let column_index = column_names
+                                        .iter()
+                                        .position(|n| n == column_name)
+                                        .unwrap_or_else(|| {
+                                            eprintln!(
+                                                "Column {} not found in table {}",
+                                                column_name, sql_statement.table_name
+                                            );
+                                            std::process::exit(1)
+                                        });
+
+                                    result +=
+                                        &format!("{} ", leaf_table_cell.payload.body[column_index]);
+                                }
+                            }
+                        }
+
+                        println!("{}", result.trim_end());
+                    }
+                }
+            }
         }
     }
 
     Ok(())
 }
 
-fn read_cells(file: &mut File, b_tree_page_header: &BTreePageHeader) -> Result<Vec<BTreeCell>> {
-    let mut cells = Vec::new();
-
-    for cell_pointer in &b_tree_page_header.cell_pointers {
-        file.seek(std::io::SeekFrom::Start(*cell_pointer as u64))?;
-        cells.push(read_cell(file, b_tree_page_header)?);
-    }
-
-    Ok(cells)
-}
-
-fn read_cell(file: &mut File, b_tree_page_header: &BTreePageHeader) -> Result<BTreeCell> {
-    match b_tree_page_header.page_type {
-        BTreePageType::LeafTablePage => {
-            let payload_size = Varint::from_file(file)?;
-            let row_id = Varint::from_file(file)?;
-
-            Ok(BTreeCell::LeafTableCell(BTreeLeafTableCell {
-                payload_size,
-                row_id,
-                payload: Record::new(file)?,
-                first_overflow_page: 0,
-            }))
-        }
-        _ => unimplemented!(),
-    }
+enum SqlColumnVariant<'a> {
+    Count,
+    Column(&'a str),
 }
