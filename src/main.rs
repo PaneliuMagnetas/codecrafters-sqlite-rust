@@ -525,7 +525,7 @@ fn main() -> Result<()> {
                         for column_variant in &sql_statement.column_variants {
                             match column_variant {
                                 SqlColumnVariant::Count => {
-                                    result += &format!("{} ", b_tree_page.num_cells);
+                                    result += &format!("{}|", b_tree_page.num_cells);
                                 }
                                 SqlColumnVariant::Column(column_name) => {
                                     let column_index = column_names
@@ -540,12 +540,12 @@ fn main() -> Result<()> {
                                         });
 
                                     result +=
-                                        &format!("{} ", leaf_table_cell.payload.body[column_index]);
+                                        &format!("{}|", leaf_table_cell.payload.body[column_index]);
                                 }
                             }
                         }
 
-                        println!("{}", result.trim_end());
+                        println!("{}", result.trim_end_matches('|'));
                     }
                 }
             }
