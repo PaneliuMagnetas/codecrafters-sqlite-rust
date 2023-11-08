@@ -419,10 +419,10 @@ impl<'a> SqlStatement<'a> {
         loop {
             let mut result = Err(anyhow!("Invalid SQL statement"));
             match tokenizer.next() {
-                Some(token) => match token {
+                Some(token) => match token.to_lowercase().as_str() {
                     "," => continue,
-                    "FROM" => break,
-                    "COUNT" => {
+                    "from" => break,
+                    "count" => {
                         tokenizer.tag("(")?;
                         if let Some(_) = tokenizer.next() {
                             result = Ok(SqlColumnVariant::Count);
