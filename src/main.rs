@@ -352,6 +352,7 @@ impl SchemaTable {
                     })
                     .map(|c| match c {
                         BTreeCell::LeafTableCell(c) => {
+                            eprintln!("{:?}", c.row_id.value);
                             let payload: SchemaRecord = c.payload.into();
                             (payload.tbl_name.clone(), payload)
                         }
