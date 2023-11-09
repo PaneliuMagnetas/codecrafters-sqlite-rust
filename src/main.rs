@@ -1,6 +1,7 @@
 mod tokenizer;
 
 use anyhow::{anyhow, bail, Result};
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::{self, Formatter};
 use std::fs::File;
@@ -344,6 +345,11 @@ impl SchemaTable {
                 records: b_tree_page
                     .cells
                     .into_iter()
+                    .sorted_by(|a, b| match (a, b) {
+                        (BTreeCell::LeafTableCell(a), BTreeCell::LeafTableCell(b)) => {
+                            a.row_id.value.cmp(&b.row_id.value)
+                        }
+                    })
                     .map(|c| match c {
                         BTreeCell::LeafTableCell(c) => {
                             let payload: SchemaRecord = c.payload.into();
