@@ -174,11 +174,12 @@ impl fmt::Display for RecordFormat {
 
 #[derive(Debug)]
 struct Record {
+    row_id: i64,
     body: Vec<RecordFormat>,
 }
 
 impl Record {
-    fn new(payload: &[u8]) -> Result<Self> {
+    fn new(payload: &[u8], row_id: i64) -> Result<Self> {
         let mut header = Vec::new();
         let mut body = Vec::new();
         let mut payload = payload;
@@ -200,7 +201,7 @@ impl Record {
             body.push(record_format);
         }
 
-        Ok(Record { body })
+        Ok(Record { row_id, body })
     }
 }
 
@@ -276,12 +277,16 @@ impl BTreePage {
                 BTreePageType::LeafTablePage => {
                     let (payload_size, page_slice) = Varint::from(page_slice);
                     let (row_id, page_slice) = Varint::from(page_slice);
+                    let record_row_id = row_id.value;
 
                     let payload_size_val = payload_size.value as usize;
                     BTreeCell::LeafTableCell(BTreeLeafTableCell {
                         payload_size,
                         row_id,
-                        payload: Record::new(&page_slice[..(payload_size_val as usize)])?,
+                        payload: Record::new(
+                            &page_slice[..(payload_size_val as usize)],
+                            record_row_id,
+                        )?,
                         first_overflow_page: 0,
                     })
                 }
@@ -360,6 +365,7 @@ impl SchemaTable {
 #[allow(dead_code)]
 #[derive(Debug)]
 struct SchemaRecord {
+    row_id: i64,
     r#type: String,
     name: String,
     tbl_name: String,
@@ -401,6 +407,7 @@ impl From<Record> for SchemaRecord {
         };
 
         SchemaRecord {
+            row_id: record.row_id,
             r#type: r#type.to_string(),
             name: name.to_string(),
             tbl_name: tbl_name.to_string(),
@@ -605,8 +612,8 @@ fn main() -> Result<()> {
             let mut result = String::new();
             let schema_table = SchemaTable::new(b_tree_page)?;
 
-            for (tbl_name, _) in schema_table.records {
-                result += &format!("{} ", tbl_name);
+            for record in schema_table.records.values().sorted_by_key(|x| x.row_id) {
+                result += &format!("{} ", record.tbl_name);
             }
 
             println!("{}", result.trim_end());
