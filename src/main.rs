@@ -1,11 +1,12 @@
 mod tokenizer;
 
 use anyhow::{anyhow, bail, Result};
+use std::collections::HashMap;
 use std::fmt::{self, Formatter};
 use std::fs::File;
 use std::io::{Read, Seek};
 
-use crate::tokenizer::Tokenizer;
+use crate::tokenizer::{Token, Tokenizer};
 
 #[derive(Debug)]
 enum BTreeCell {
@@ -23,6 +24,8 @@ struct BTreeLeafTableCell {
     payload: Record,
     first_overflow_page: u32,
 }
+
+impl BTreeLeafTableCell {}
 
 #[derive(Debug)]
 struct Varint {
@@ -122,6 +125,29 @@ impl RecordFormat {
                     Ok((RecordFormat::String(string), &payload[size as usize..]))
                 }
             }
+        }
+    }
+
+    fn matches(&self, token: &Token) -> Result<bool> {
+        match token {
+            Token::Number(n) => match self {
+                RecordFormat::Integer8(v) => Ok(*n == *v as i64),
+                RecordFormat::Integer16(v) => Ok(*n == *v as i64),
+                RecordFormat::Integer24(v) => Ok(*n == *v as i64),
+                RecordFormat::Integer32(v) => Ok(*n == *v as i64),
+                RecordFormat::Integer48(v) => Ok(*n == *v),
+                RecordFormat::Integer64(v) => Ok(*n == *v),
+                _ => bail!("Mismatched record format"),
+            },
+            Token::Text(t) => match self {
+                RecordFormat::NULL => Ok(*t == "NULL"),
+                _ => bail!("Mismatched record format"),
+            },
+            Token::String(s) => match self {
+                RecordFormat::String(v) => Ok(s == v),
+                _ => bail!("Mismatched record format"),
+            },
+            _ => bail!("Mismatched record format"),
         }
     }
 }
@@ -308,7 +334,7 @@ impl BTreePage {
 
 #[derive(Debug)]
 struct SchemaTable {
-    records: Vec<SchemaRecord>,
+    records: HashMap<String, SchemaRecord>,
 }
 
 impl SchemaTable {
@@ -319,9 +345,12 @@ impl SchemaTable {
                     .cells
                     .into_iter()
                     .map(|c| match c {
-                        BTreeCell::LeafTableCell(c) => c.payload.into(),
+                        BTreeCell::LeafTableCell(c) => {
+                            let payload: SchemaRecord = c.payload.into();
+                            (payload.tbl_name.clone(), payload)
+                        }
                     })
-                    .collect::<Vec<SchemaRecord>>(),
+                    .collect::<HashMap<String, SchemaRecord>>(),
             }),
         }
     }
@@ -381,7 +410,7 @@ impl From<Record> for SchemaRecord {
 }
 
 impl SchemaRecord {
-    fn get_column_names(&self) -> Result<Vec<String>> {
+    fn get_columns(&self) -> Result<HashMap<String, usize>> {
         let mut tokenizer = Tokenizer::new(&self.sql);
 
         tokenizer.tag("CREATE")?;
@@ -390,23 +419,33 @@ impl SchemaRecord {
 
         tokenizer.tag("(")?;
 
-        let mut result = Vec::new();
+        let mut result = HashMap::new();
 
+        let mut i: usize = 0;
         loop {
-            let tokens = tokenizer.take_while(|t| t != "," && t != ")");
+            let tokens = tokenizer
+                .take_while(|t| *t != Token::Punctuation(',') && *t != Token::Punctuation(')'));
 
-            result.push(String::from(tokens[0]));
+            let token = match tokens[0] {
+                Token::Text(s) => s,
+                _ => bail!("Invalid SQL create statement"),
+            };
 
-            if tokenizer.next().unwrap() == ")" {
-                break Ok(result);
+            result.insert(String::from(token), i);
+            i += 1;
+
+            match tokenizer.next() {
+                Some(Token::Punctuation(')')) => break Ok(result),
+                _ => (),
             }
         }
     }
 }
 
 struct SqlStatement<'a> {
-    table_name: &'a str,
     column_variants: Vec<SqlColumnVariant<'a>>,
+    table_name: &'a str,
+    where_clause: Option<SqlWhereClause<'a>>,
 }
 
 impl<'a> SqlStatement<'a> {
@@ -414,22 +453,24 @@ impl<'a> SqlStatement<'a> {
         let mut tokenizer = Tokenizer::new(sql);
         let mut column_variants = Vec::new();
 
-        tokenizer.tag("SELECT")?;
+        tokenizer.tag("select")?;
 
         loop {
             let mut result = Err(anyhow!("Invalid SQL statement"));
             match tokenizer.next() {
-                Some(token) => match token.to_lowercase().as_str() {
-                    "," => continue,
-                    "from" => break,
-                    "count" => {
+                Some(token) => match token {
+                    Token::Punctuation(',') => continue,
+                    Token::Text("from") => break,
+                    Token::Text("count") => {
                         tokenizer.tag("(")?;
                         if let Some(_) = tokenizer.next() {
                             result = Ok(SqlColumnVariant::Count);
                         }
                         tokenizer.tag(")")?;
                     }
-                    _ => result = Ok(SqlColumnVariant::Column(token)),
+                    Token::Text(column) => result = Ok(SqlColumnVariant::Column(column)),
+                    Token::Punctuation('*') => result = Ok(SqlColumnVariant::EveryColumn),
+                    _ => bail!("Invalid SQL statement"),
                 },
                 None => bail!("Invalid SQL statement"),
             };
@@ -437,15 +478,98 @@ impl<'a> SqlStatement<'a> {
             column_variants.push(result?);
         }
 
-        let table = tokenizer
-            .next()
-            .ok_or_else(|| anyhow!("Missing table name in sql statement"))?;
+        let table = match tokenizer.next() {
+            Some(Token::Text(table)) => table,
+            _ => bail!("Invalid SQL statement"),
+        };
+
+        let mut where_clause = None;
+
+        if let Some(_) = tokenizer.peek() {
+            where_clause = Some(SqlWhereClause::new(tokenizer.remaining())?);
+        }
 
         Ok(SqlStatement {
             column_variants,
             table_name: table,
+            where_clause,
         })
     }
+}
+
+struct SqlWhereClause<'a> {
+    columns: Vec<SqlWhereColumn<'a>>,
+}
+
+#[allow(dead_code)]
+struct SqlWhereColumn<'a> {
+    column: &'a str,
+    operator: SqlOperator,
+    value: Token<'a>,
+}
+
+impl<'a> SqlWhereClause<'a> {
+    fn new(sql: &'a str) -> Result<Self> {
+        let mut tokenizer = Tokenizer::new(sql);
+        let mut columns = Vec::new();
+
+        tokenizer.tag("where")?;
+
+        loop {
+            if tokenizer.peek().is_none() {
+                break;
+            }
+
+            let column = match tokenizer.next() {
+                Some(Token::Text(column)) => column,
+                _ => bail!("Invalid where clause"),
+            };
+
+            let operator = match tokenizer.next() {
+                Some(Token::Punctuation('=')) => SqlOperator::Equal,
+                _ => bail!("Invalid operator in where clause"),
+            };
+
+            let value = tokenizer
+                .next()
+                .ok_or_else(|| anyhow!("Missing value in where clause"))?;
+
+            if let Some(_) = tokenizer.peek() {
+                bail!("Invalid where clause");
+            }
+
+            columns.push(SqlWhereColumn {
+                column,
+                operator,
+                value,
+            });
+        }
+
+        Ok(SqlWhereClause { columns })
+    }
+
+    fn matches(&self, b_tree_cell: &BTreeCell, columns: &HashMap<String, usize>) -> Result<bool> {
+        for wc in self.columns.iter() {
+            let column_index = match columns.get(wc.column) {
+                Some(i) => i,
+                None => return Err(anyhow!("Column {} not found", wc.column,)),
+            };
+
+            match b_tree_cell {
+                BTreeCell::LeafTableCell(leaf_table_cell) => {
+                    if !leaf_table_cell.payload.body[*column_index].matches(&wc.value)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+
+        Ok(true)
+    }
+}
+
+enum SqlOperator {
+    Equal,
 }
 
 fn main() -> Result<()> {
@@ -480,8 +604,8 @@ fn main() -> Result<()> {
             let mut result = String::new();
             let schema_table = SchemaTable::new(b_tree_page)?;
 
-            for record in schema_table.records {
-                result += &format!("{} ", record.name);
+            for (tbl_name, _) in schema_table.records {
+                result += &format!("{} ", tbl_name);
             }
 
             println!("{}", result.trim_end());
@@ -492,14 +616,13 @@ fn main() -> Result<()> {
 
             let schema_record = schema_table
                 .records
-                .iter()
-                .find(|r| r.name == sql_statement.table_name)
+                .get(sql_statement.table_name)
                 .unwrap_or_else(|| {
-                    eprintln!("Table not found");
+                    eprintln!("Table {} not found", sql_statement.table_name);
                     std::process::exit(1)
                 });
 
-            let column_names = schema_record.get_column_names()?;
+            let column_names = schema_record.get_columns()?;
 
             file.seek(std::io::SeekFrom::Start(
                 (schema_record.rootpage as u64 - 1) * page_size as u64,
@@ -517,9 +640,22 @@ fn main() -> Result<()> {
                 }
             }
 
+            let flag = sql_statement.where_clause.is_some();
+
             for cell in b_tree_page.cells {
-                match cell {
+                match &cell {
                     BTreeCell::LeafTableCell(leaf_table_cell) => {
+                        if flag {
+                            if !sql_statement
+                                .where_clause
+                                .as_ref()
+                                .unwrap()
+                                .matches(&cell, &column_names)?
+                            {
+                                continue;
+                            }
+                        }
+
                         let mut result = String::new();
 
                         for column_variant in &sql_statement.column_variants {
@@ -528,19 +664,26 @@ fn main() -> Result<()> {
                                     result += &format!("{}|", b_tree_page.num_cells);
                                 }
                                 SqlColumnVariant::Column(column_name) => {
-                                    let column_index = column_names
-                                        .iter()
-                                        .position(|n| n == column_name)
-                                        .unwrap_or_else(|| {
+                                    let column_index = match column_names.get(*column_name) {
+                                        Some(i) => i,
+                                        None => {
                                             eprintln!(
                                                 "Column {} not found in table {}",
                                                 column_name, sql_statement.table_name
                                             );
                                             std::process::exit(1)
-                                        });
+                                        }
+                                    };
 
-                                    result +=
-                                        &format!("{}|", leaf_table_cell.payload.body[column_index]);
+                                    result += &format!(
+                                        "{}|",
+                                        leaf_table_cell.payload.body[*column_index]
+                                    );
+                                }
+                                SqlColumnVariant::EveryColumn => {
+                                    for column in &leaf_table_cell.payload.body {
+                                        result += &format!("{}|", column);
+                                    }
                                 }
                             }
                         }
@@ -555,7 +698,9 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 enum SqlColumnVariant<'a> {
     Count,
     Column(&'a str),
+    EveryColumn,
 }
