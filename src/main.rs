@@ -345,14 +345,8 @@ impl SchemaTable {
                 records: b_tree_page
                     .cells
                     .into_iter()
-                    .sorted_by(|a, b| match (a, b) {
-                        (BTreeCell::LeafTableCell(a), BTreeCell::LeafTableCell(b)) => {
-                            a.row_id.value.cmp(&b.row_id.value)
-                        }
-                    })
                     .map(|c| match c {
                         BTreeCell::LeafTableCell(c) => {
-                            eprintln!("{:?}", c.row_id.value);
                             let payload: SchemaRecord = c.payload.into();
                             (payload.tbl_name.clone(), payload)
                         }
