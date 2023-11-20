@@ -72,11 +72,11 @@ impl<'a> Tokenizer<'a> {
                 let result = &self.input[index..index_iter];
                 (Some(Token::Text(result)), index_iter)
             }
-            c if c == '\'' => {
-                while let (Some(c), i) = self.get_char(index_iter) {
-                    if c == '\'' {
-                        if let (Some(c), _) = self.get_char(i) {
-                            if c == '\'' {
+            c if c == '\'' || c == '"' => {
+                while let (Some(ch), i) = self.get_char(index_iter) {
+                    if ch == c {
+                        if let (Some(ch), _) = self.get_char(i) {
+                            if ch == c {
                                 index_iter = i + 1;
                                 continue;
                             }
