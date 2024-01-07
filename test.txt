@@ -1,3 +1,0 @@
-121311|unilink s.c.|unilinksc.com|2014.0|computer software|1 - 10|NULL|eritrea|0|2
-2102438|orange asmara it solutions|orangeasmara.com|2008.0|information technology and services|1 - 10|asmara, maekel, eritrea|eritrea|0|4
-6634629|asmara rental|asmararental.com|2010.0|real estate|1 - 10|NULL|eritrea|1|1
