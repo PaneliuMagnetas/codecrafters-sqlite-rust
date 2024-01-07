@@ -415,16 +415,17 @@ impl<'a> Schema {
 
                     (r.rootpage, mapped_sql_statement, keys)
                 })
-                .max_by_key(|(_, _, keys)| keys.len())
-                .unwrap();
+                .max_by_key(|(_, _, keys)| keys.len());
 
-            let (rootpage, mapped_sql_statement, keys) = index;
+            if let Some(index) = index {
+                let (rootpage, mapped_sql_statement, keys) = index;
 
-            if keys.len() > 0 {
-                let index = read_page(rootpage)?;
-                let index_iter = IndexIterator::new(index, cell_iter, keys)?;
+                if keys.len() > 0 {
+                    let index = read_page(rootpage)?;
+                    let index_iter = IndexIterator::new(index, cell_iter, keys)?;
 
-                return Ok(Records::new(Box::new(index_iter), mapped_sql_statement?));
+                    return Ok(Records::new(Box::new(index_iter), mapped_sql_statement?));
+                }
             }
         }
 

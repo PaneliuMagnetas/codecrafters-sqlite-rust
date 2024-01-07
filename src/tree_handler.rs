@@ -216,7 +216,7 @@ impl<'a> BTreePage {
         let mut header_len = 8;
         let _first_freeblock_offset = u16::from_be_bytes([page[1], page[2]]);
         let num_cells = u16::from_be_bytes([page[3], page[4]]);
-        let cell_content_area = u16::from_be_bytes([page[5], page[6]]);
+        let _cell_content_area = u16::from_be_bytes([page[5], page[6]]);
         let _fragment_bytes = page[7];
         let mut right_most_pointer = None;
         if page_type == BTreePageType::InteriorIndexPage
