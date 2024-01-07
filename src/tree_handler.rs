@@ -127,31 +127,32 @@ pub struct BTreePage {
     pub page_type: BTreePageType,
     //first_freeblock_offset: u16,
     pub num_cells: u16,
-    cell_content_area: u16,
+    //cell_content_area: u16,
     //fragment_bytes: u8,
     pub right_most_pointer: Option<u32>,
     cell_pointers: Vec<u16>,
-    cell_content: Vec<u8>,
+    pub cells: Vec<BTreeCell>,
 }
 
 impl<'a> BTreePage {
     fn new(page: Vec<u8>) -> Result<Self> {
-        let b_tree_page = Self::read_header(&page)?;
+        let mut b_tree_page = Self::read_header(&page)?;
+        b_tree_page.cells = b_tree_page.read_cells(&page)?;
 
         Ok(b_tree_page)
     }
 
     fn with_offset_header(page: Vec<u8>, offset: usize) -> Result<Self> {
         let mut b_tree_page = Self::read_header(&page[offset..])?;
-        b_tree_page.cell_content = page[b_tree_page.cell_content_area as usize..].to_vec();
+        b_tree_page.cells = b_tree_page.read_cells(&page)?;
 
         Ok(b_tree_page)
     }
 
-    pub fn cells(&self) -> Result<Vec<BTreeCell>> {
+    pub fn read_cells(&self, page: &Vec<u8>) -> Result<Vec<BTreeCell>> {
         let mut cells = Vec::new();
         for cell_pointer in &self.cell_pointers {
-            let page_slice = &self.cell_content[*cell_pointer as usize..];
+            let page_slice = &page[*cell_pointer as usize..];
             cells.push(match self.page_type {
                 BTreePageType::InteriorIndexPage => {
                     let left_child_page = u32::from_be_bytes(page_slice[..4].try_into()?);
@@ -230,18 +231,18 @@ impl<'a> BTreePage {
         let cell_pointer_size = num_cells as usize * 2 + header_len;
 
         for chunk in page[header_len..cell_pointer_size].chunks(2) {
-            cell_pointers.push(u16::from_be_bytes([chunk[0], chunk[1]]) - cell_content_area);
+            cell_pointers.push(u16::from_be_bytes([chunk[0], chunk[1]]));
         }
 
         Ok(BTreePage {
             page_type,
             //first_freeblock_offset,
             num_cells,
-            cell_content_area,
+            //cell_content_area,
             //fragment_bytes,
             right_most_pointer,
             cell_pointers,
-            cell_content: page[cell_content_area as usize..].to_vec(),
+            cells: Vec::new(),
         })
     }
 

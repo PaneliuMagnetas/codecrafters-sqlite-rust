@@ -43,7 +43,7 @@ pub struct CellIterator {
 impl CellIterator {
     pub fn new(page: BTreePage) -> Result<Self> {
         Ok(CellIterator {
-            cell_iter: page.cells()?.into_iter(),
+            cell_iter: page.cells.into_iter(),
             right_most_pointer: page.right_most_pointer,
             record_iter: None,
             get_index: 0,
@@ -106,7 +106,7 @@ impl Iterator for CellIterator {
                         let b_tree_page = read_page(cell.left_child_page).unwrap();
 
                         self.record_iter = Some(Box::new(CellIterator {
-                            cell_iter: b_tree_page.cells().unwrap().into_iter(),
+                            cell_iter: b_tree_page.cells.into_iter(),
                             right_most_pointer: b_tree_page.right_most_pointer,
                             record_iter: None,
                             get_index: self.get_index,
@@ -124,7 +124,7 @@ impl Iterator for CellIterator {
                     let b_tree_page = read_page(right_most_pointer).unwrap();
 
                     self.record_iter = Some(Box::new(CellIterator {
-                        cell_iter: b_tree_page.cells().unwrap().into_iter(),
+                        cell_iter: b_tree_page.cells.into_iter(),
                         right_most_pointer: b_tree_page.right_most_pointer,
                         record_iter: None,
                         get_index: self.get_index,
@@ -153,7 +153,7 @@ struct IndexIterator {
 impl IndexIterator {
     fn new(page: BTreePage, cell_iter: CellIterator, keys: Vec<String>) -> Result<Self> {
         Ok(IndexIterator {
-            cell_iter: page.cells()?.into_iter(),
+            cell_iter: page.cells.into_iter(),
             index_iter: None,
             right_most_pointer: page.right_most_pointer,
             record_iter: Rc::new(RefCell::new(cell_iter)),
@@ -212,7 +212,7 @@ impl Iterator for IndexIterator {
                         }
 
                         self.index_iter = Some(Box::new(IndexIterator {
-                            cell_iter: b_tree_page.cells().unwrap().into_iter(),
+                            cell_iter: b_tree_page.cells.into_iter(),
                             right_most_pointer: b_tree_page.right_most_pointer,
                             keys: self.keys.clone(),
                             index_iter: None,
@@ -229,7 +229,7 @@ impl Iterator for IndexIterator {
                     let b_tree_page = read_page(right_most_pointer).unwrap();
 
                     self.index_iter = Some(Box::new(IndexIterator {
-                        cell_iter: b_tree_page.cells().unwrap().into_iter(),
+                        cell_iter: b_tree_page.cells.into_iter(),
                         right_most_pointer: b_tree_page.right_most_pointer,
                         keys: self.keys.clone(),
                         index_iter: None,
