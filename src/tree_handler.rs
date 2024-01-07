@@ -53,9 +53,9 @@ pub enum BTreeCell {
 #[derive(Debug)]
 pub struct BTreeInteriorIndexCell {
     pub left_child_page: u32,
-    payload_size: Varint,
+    //payload_size: Varint,
     payload: Vec<u8>,
-    first_overflow_page: u32,
+    //first_overflow_page: u32,
 }
 
 impl BTreeInteriorIndexCell {
@@ -72,10 +72,10 @@ pub struct BTreeInteriorTableCell {
 
 #[derive(Debug)]
 pub struct BTreeLeafTableCell {
-    payload_size: Varint,
+    //payload_size: Varint,
     pub row_id: Varint,
     payload: Vec<u8>,
-    first_overflow_page: u32,
+    //first_overflow_page: u32,
 }
 
 pub fn values(payload: &Vec<u8>) -> Result<Vec<RecordFormat>> {
@@ -111,9 +111,9 @@ impl BTreeLeafTableCell {
 
 #[derive(Debug)]
 pub struct BTreeLeafIndexCell {
-    payload_size: Varint,
+    //payload_size: Varint,
     payload: Vec<u8>,
-    first_overflow_page: u32,
+    //first_overflow_page: u32,
 }
 
 impl BTreeLeafIndexCell {
@@ -125,10 +125,10 @@ impl BTreeLeafIndexCell {
 #[derive(Debug)]
 pub struct BTreePage {
     pub page_type: BTreePageType,
-    first_freeblock_offset: u16,
+    //first_freeblock_offset: u16,
     pub num_cells: u16,
     cell_content_area: u16,
-    fragment_bytes: u8,
+    //fragment_bytes: u8,
     pub right_most_pointer: Option<u32>,
     cell_pointers: Vec<u16>,
     cell_content: Vec<u8>,
@@ -161,9 +161,9 @@ impl<'a> BTreePage {
                     let payload_size_val = payload_size.value as usize;
                     BTreeCell::InteriorIndexCell(BTreeInteriorIndexCell {
                         left_child_page,
-                        payload_size,
+                        //payload_size,
                         payload: page_slice[..(payload_size_val as usize)].to_vec(),
-                        first_overflow_page: 0,
+                        //first_overflow_page: 0,
                     })
                 }
                 BTreePageType::InteriorTablePage => {
@@ -181,10 +181,10 @@ impl<'a> BTreePage {
 
                     let payload_size_val = payload_size.value as usize;
                     BTreeCell::LeafTableCell(BTreeLeafTableCell {
-                        payload_size,
+                        //payload_size,
                         row_id,
                         payload: page_slice[..(payload_size_val as usize)].to_vec(),
-                        first_overflow_page: 0,
+                        //first_overflow_page: 0,
                     })
                 }
                 BTreePageType::LeafIndexPage => {
@@ -192,9 +192,9 @@ impl<'a> BTreePage {
 
                     let payload_size_val = payload_size.value as usize;
                     BTreeCell::LeafIndexCell(BTreeLeafIndexCell {
-                        payload_size,
+                        //payload_size,
                         payload: page_slice[..(payload_size_val as usize)].to_vec(),
-                        first_overflow_page: 0,
+                        //first_overflow_page: 0,
                     })
                 }
             });
@@ -213,10 +213,10 @@ impl<'a> BTreePage {
         };
 
         let mut header_len = 8;
-        let first_freeblock_offset = u16::from_be_bytes([page[1], page[2]]);
+        let _first_freeblock_offset = u16::from_be_bytes([page[1], page[2]]);
         let num_cells = u16::from_be_bytes([page[3], page[4]]);
         let cell_content_area = u16::from_be_bytes([page[5], page[6]]);
-        let fragment_bytes = page[7];
+        let _fragment_bytes = page[7];
         let mut right_most_pointer = None;
         if page_type == BTreePageType::InteriorIndexPage
             || page_type == BTreePageType::InteriorTablePage
@@ -235,10 +235,10 @@ impl<'a> BTreePage {
 
         Ok(BTreePage {
             page_type,
-            first_freeblock_offset,
+            //first_freeblock_offset,
             num_cells,
             cell_content_area,
-            fragment_bytes,
+            //fragment_bytes,
             right_most_pointer,
             cell_pointers,
             cell_content: page[cell_content_area as usize..].to_vec(),

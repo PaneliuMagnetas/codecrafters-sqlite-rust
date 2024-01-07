@@ -67,19 +67,6 @@ impl SqlStatement {
         })
     }
 
-    pub fn keys(&self) -> Vec<String> {
-        let mut keys = Vec::new();
-
-        for c in &self.column_variants {
-            match c {
-                SqlColumnVariant::Column(col) => keys.push(col.clone()),
-                _ => (),
-            }
-        }
-
-        keys
-    }
-
     pub fn map(
         &self,
         table_schema: &SchemaRecord,
