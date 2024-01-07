@@ -6,8 +6,8 @@ pub struct Tokenizer<'a> {
     index: usize,
 }
 
-impl<'a> Tokenizer<'a> {
-    pub fn new(input: &'a str) -> Tokenizer<'a> {
+impl Tokenizer<'_> {
+    pub fn new<'a>(input: &'a str) -> Tokenizer {
         Tokenizer { input, index: 0 }
     }
 
@@ -16,13 +16,7 @@ impl<'a> Tokenizer<'a> {
         (c, index + 1)
     }
 
-    // pub fn next_char(&mut self) -> Option<char> {
-    //     let (c, i) = self.get_char(self.index);
-    //     self.index = i;
-    //     c
-    // }
-
-    pub fn take_while(&mut self, func: impl Fn(&Token) -> bool) -> Vec<Token<'a>> {
+    pub fn take_while(&mut self, func: impl Fn(&Token) -> bool) -> Vec<Token> {
         let mut result = Vec::new();
         let mut index = self.index;
 
@@ -39,7 +33,7 @@ impl<'a> Tokenizer<'a> {
         result
     }
 
-    fn get_token(&self, index: usize) -> (Option<Token<'a>>, usize) {
+    fn get_token(&self, index: usize) -> (Option<Token>, usize) {
         let (c, i) = self.get_char(index);
 
         if c.is_none() {
@@ -70,7 +64,7 @@ impl<'a> Tokenizer<'a> {
                     index_iter = i;
                 }
                 let result = &self.input[index..index_iter];
-                (Some(Token::Text(result)), index_iter)
+                (Some(Token::Text(String::from(result))), index_iter)
             }
             c if c == '\'' || c == '"' => {
                 while let (Some(ch), i) = self.get_char(index_iter) {
@@ -90,7 +84,7 @@ impl<'a> Tokenizer<'a> {
                 }
 
                 let result = &self.input[index + 1..index_iter - 1];
-                return (Some(Token::String(result)), index_iter);
+                return (Some(Token::String(String::from(result))), index_iter);
             }
             ch if " \n\t".contains(c) => {
                 while let (Some(c), i) = self.get_char(index_iter) {
@@ -107,16 +101,16 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    pub fn remaining(&self) -> &'a str {
+    pub fn remaining(&self) -> &str {
         &self.input[self.index..]
     }
 
-    pub fn peek(&mut self) -> Option<Token<'a>> {
+    pub fn peek(&mut self) -> Option<Token> {
         let (token, _) = self.get_token(self.index);
         token
     }
 
-    pub fn next(&mut self) -> Option<Token<'a>> {
+    pub fn next(&mut self) -> Option<Token> {
         let (token, index) = self.get_token(self.index);
         self.index = index;
         token
@@ -155,14 +149,25 @@ impl<'a> Tokenizer<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Token<'a> {
+pub enum Token {
     Number(i64),
-    String(&'a str),
-    Text(&'a str),
+    String(String),
+    Text(String),
     Punctuation(char),
 }
 
-impl fmt::Display for Token<'_> {
+impl From<Token> for String {
+    fn from(t: Token) -> Self {
+        match t {
+            Token::Number(n) => n.to_string(),
+            Token::String(s) => s,
+            Token::Text(t) => t,
+            Token::Punctuation(c) => String::from(c),
+        }
+    }
+}
+
+impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Token::Number(n) => write!(f, "{}", n),
